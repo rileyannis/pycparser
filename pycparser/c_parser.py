@@ -129,6 +129,9 @@ class CParser(PLYParser):
         # Keeps track of the last token given to yacc (the lookahead token)
         self._last_yielded_token = None
 
+        self._841 = False
+        self._841_out = []
+
     def parse(self, text, filename='', debuglevel=0):
         """ Parses C code and returns an AST.
 
@@ -151,14 +154,89 @@ class CParser(PLYParser):
                 lexer=self.clex,
                 debug=debuglevel)
 
+    def parse_841(self, text, filename='', debuglevel=0):
+        """ Parses C code and returns an AST.
+
+            text:
+                A string containing the C source code
+
+            filename:
+                Name of the file being parsed (for meaningful
+                error messages)
+
+            debuglevel:
+                Debug level to yacc
+        """
+        self.clex.filename = filename
+        self.clex.reset_lineno()
+        self._scope_stack = [dict()]
+        self._last_yielded_token = None
+        self._841 = True
+        self._841_out = []
+        self._841_variables = [dict()]
+        self.cparser.parse(
+                input=text,
+                lexer=self.clex,
+                debug=debuglevel)#,
+                #tracking=True)
+        return self._841_out
+
+
+
     ######################--   PRIVATE   --######################
+
+    
+    def _841_update_last_usage(self, unary):
+        #update last usage, or recurse
+        try:
+            if isinstance(unary.name, str):
+                for scope in reversed(self._841_variables):
+                    in_scope = scope.get(unary.name)
+                    if in_scope is not None:
+                        scope[unary.name] = unary.coord.line
+                        break
+            else:
+                self._841_update_last_usage(unary.name)
+        except:
+            self._841_update_last_usage(unary.expr)
+
+
+    def _841_generate_data_dep(self, expr):
+        #try to append to output if possible
+        try:
+            if isinstance(expr.name, str):
+                for scope in reversed(self._841_variables):
+                    in_scope = scope.get(expr.name)
+                    if in_scope is not None:
+                        self._841_out.append(["dataDep",
+                            [in_scope, expr.coord.line]])
+                        break
+        #otherwise try all the possible attributes
+            else:
+                self._841_generate_data_dep(expr.name)
+        except:
+            try:
+                self._841_generate_data_dep(expr.expr)
+            except:
+                pass
+            try:
+                self._841_generate_data_dep(expr.left)
+            except:
+                pass
+            try:
+                self._841_generate_data_dep(expr.right)
+            except:
+                pass
+
 
     def _push_scope(self):
         self._scope_stack.append(dict())
+        self._841_variables.append(dict())
 
     def _pop_scope(self):
         assert len(self._scope_stack) > 1
         self._scope_stack.pop()
+        self._841_variables.pop()
 
     def _add_typedef_name(self, name, coord):
         """ Add a new typedef name (ie a TYPEID) to the current scope
@@ -178,6 +256,7 @@ class CParser(PLYParser):
                 "Non-typedef %r previously declared as typedef "
                 "in this scope" % name, coord)
         self._scope_stack[-1][name] = False
+        self._841_variables[-1][name] = coord.line
 
     def _is_type_in_scope(self, name):
         """ Is *name* a typedef-name in the current scope?
@@ -1418,10 +1497,29 @@ class CParser(PLYParser):
 
     def p_selection_statement_1(self, p):
         """ selection_statement : IF LPAREN expression RPAREN statement """
+        if self._841:
+            self._841_out.append(["isBranch", [p.lineno(1)]])
+            if isinstance(p[5], c_ast.Compound):
+                for statement in p[5].block_items:
+                    self._841_out.append(["controlDep", [p.lineno(1), statement.coord.line]])
+            else:
+                self._841_out.append(["controlDep", [p.lineno(1), p[5].coord.line]])
         p[0] = c_ast.If(p[3], p[5], None, self._token_coord(p, 1))
 
     def p_selection_statement_2(self, p):
         """ selection_statement : IF LPAREN expression RPAREN statement ELSE statement """
+        if self._841:
+            self._841_out.append(["isBranch", [p.lineno(1)]])
+            if isinstance(p[5], c_ast.Compound):
+                for statement in p[5].block_items:
+                    self._841_out.append(["controlDep", [p.lineno(1), statement.coord.line]])
+            else:
+                self._841_out.append(["controlDep", [p.lineno(1), p[5].coord.line]])
+            if isinstance(p[7], c_ast.Compound):
+                 for statement in p[7].block_items:
+                    self._841_out.append(["controlDep", [p.lineno(1), statement.coord.line]])
+            else:
+                self._841_out.append(["controlDep", [p.lineno(1), p[7].coord.line]])
         p[0] = c_ast.If(p[3], p[5], p[7], self._token_coord(p, 1))
 
     def p_selection_statement_3(self, p):
@@ -1431,6 +1529,13 @@ class CParser(PLYParser):
 
     def p_iteration_statement_1(self, p):
         """ iteration_statement : WHILE LPAREN expression RPAREN statement """
+        if self._841:
+            self._841_out.append(["isBranch", [p.lineno(1)]])
+            if isinstance(p[5], c_ast.Compound):
+                for statement in p[5].block_items:
+                    self._841_out.append(["controlDep", [p.lineno(1), statement.coord.line]])
+            else:
+                self._841_out.append(["controlDep", [p.lineno(1), p[5].coord.line]])
         p[0] = c_ast.While(p[3], p[5], self._token_coord(p, 1))
 
     def p_iteration_statement_2(self, p):
@@ -1439,10 +1544,24 @@ class CParser(PLYParser):
 
     def p_iteration_statement_3(self, p):
         """ iteration_statement : FOR LPAREN expression_opt SEMI expression_opt SEMI expression_opt RPAREN statement """
+        if self._841:
+            self._841_out.append(["isBranch", [p.lineno(1)]])
+            if isinstance(p[9], c_ast.Compound):
+                for statement in p[9].block_items:
+                    self._841_out.append(["controlDep", [p.lineno(1), statement.coord.line]])
+            else:
+                self._841_out.append(["controlDep", [p.lineno(1), p[9].coord.line]])
         p[0] = c_ast.For(p[3], p[5], p[7], p[9], self._token_coord(p, 1))
 
     def p_iteration_statement_4(self, p):
         """ iteration_statement : FOR LPAREN declaration expression_opt SEMI expression_opt RPAREN statement """
+        if self._841:
+            self._841_out.append(["isBranch", [p.lineno(1)]])
+            if isinstance(p[8], c_ast.Compound):
+                for statement in p[8].block_items:
+                    self._841_out.append(["controlDep", [p.lineno(1), statement.coord.line]])
+            else:
+                self._841_out.append(["controlDep", [p.lineno(1), p[8].coord.line]])
         p[0] = c_ast.For(c_ast.DeclList(p[3], self._token_coord(p, 1)),
                          p[4], p[6], p[8], self._token_coord(p, 1))
 
@@ -1496,6 +1615,10 @@ class CParser(PLYParser):
             p[0] = p[1]
         else:
             p[0] = c_ast.Assignment(p[2], p[1], p[3], p[1].coord)
+            #IF HERE THEN DATA DEP TIME
+            self._841_generate_data_dep(p[3])
+            self._841_update_last_usage(p[1])
+
 
     # K&R2 defines these as many separate rules, to encode
     # precedence and associativity. Why work hard ? I'll just use
